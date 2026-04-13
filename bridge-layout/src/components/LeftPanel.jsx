@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 /* ── Mock environmental data per city ── */
 const CITY_DATA = {
@@ -20,15 +20,84 @@ const labelDisabled = 'text-sm font-medium text-gray-400 dark:text-gray-600';
 const LeftPanel = () => {
   const [activeTab, setActiveTab] = useState('basic');
 
-  /* ── Controlled form state ── */
+  /* ── Controlled form state (Standard Inputs) ── */
   const [structureType, setStructureType] = useState('Highway');
   const [city, setCity] = useState('');
   const [girder, setGirder] = useState('E250');
   const [crossBracing, setCrossBracing] = useState('E250');
   const [deck, setDeck] = useState('M25');
 
+  /* ── Geometric Details state ── */
+  const [span, setSpan] = useState(30);
+  const [carriagewayWidth, setCarriagewayWidth] = useState(7.5);
+  const [footpath, setFootpath] = useState('None');
+  const [skewAngle, setSkewAngle] = useState(0);
+
+  /* ── Modal & Additional Geometry state ── */
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [girderSpacing, setGirderSpacing] = useState(2.5);
+  const [noOfGirders, setNoOfGirders] = useState(4);
+  const [overhangWidth, setOverhangWidth] = useState(1.0);
+  const [lastChanged, setLastChanged] = useState(null);
+
   const isOther = structureType === 'Other';
   const cityInfo = CITY_DATA[city] || null;
+
+  /* ── Recalculate Overall Width dynamically (Structure Constant) ── */
+  const overallWidth = Number(carriagewayWidth) + 5;
+
+  /* ── Interdependent Geometry Math ── 
+     Equation: Overall Width = Overhang + (Spacing * NoGirders)
+     Uses strict useEffect hooks to maintain structural balance based on user input priority.
+  */
+  useEffect(() => {
+    if (!isModalOpen || !lastChanged) return;
+
+    // Small epsilon to prevent precision-based infinite loops
+    const EPSILON = 0.0001;
+    
+    // Safety check for valid numeric inputs to prevent Infinity/NaN crashes
+    const safeSpacing = girderSpacing > 0 ? girderSpacing : 2.5;
+    const safeGirders = noOfGirders > 0 ? noOfGirders : 2;
+
+    if (lastChanged === 'spacing') {
+      /* Rule: Adjust girders to fit the new spacing, then refine overhang to close the gap. */
+      const calculatedGirders = Math.max(2, Math.round((overallWidth - overhangWidth) / safeSpacing));
+      const calculatedOverhang = overallWidth - (calculatedGirders * safeSpacing);
+
+      if (Math.abs(noOfGirders - calculatedGirders) > EPSILON) setNoOfGirders(calculatedGirders);
+      if (Math.abs(overhangWidth - calculatedOverhang) > EPSILON) setOverhangWidth(calculatedOverhang);
+    } 
+    else if (lastChanged === 'noOfGirders') {
+      /* Rule: Keep current overhang, solve for spacing to fit the new number of girders. */
+      const calculatedSpacing = (overallWidth - overhangWidth) / safeGirders;
+      if (Math.abs(girderSpacing - calculatedSpacing) > EPSILON) setGirderSpacing(calculatedSpacing);
+    } 
+    else if (lastChanged === 'overhang') {
+      /* Rule: Adjust girders roughly, then solve for spacing to balance the remaining width. */
+      const calculatedGirders = Math.max(2, Math.round((overallWidth - overhangWidth) / safeSpacing));
+      const calculatedSpacing = (overallWidth - overhangWidth) / (calculatedGirders || 2);
+
+      if (Math.abs(noOfGirders - calculatedGirders) > EPSILON) setNoOfGirders(calculatedGirders);
+      if (Math.abs(girderSpacing - calculatedSpacing) > EPSILON) setGirderSpacing(calculatedSpacing);
+    }
+
+    setLastChanged(null);
+  }, [lastChanged, isModalOpen, overallWidth, noOfGirders, girderSpacing, overhangWidth]);
+
+  /* ── Structural Validation Logic ──
+     - Span Limit: Ensure girder length is within standard efficiency range (20-45m).
+     - Width Limit: Ensure carriageway conforms to standard lane configurations (4.25-24m).
+     - Skew Limit: Prevent excessive torsional stress by limiting angle to +/- 15°.
+  */
+  const errors = {
+    span: (span < 20 || span > 45) ? 'Span must be between 20 and 45m' : null,
+    carriageway: (carriagewayWidth < 4.25 || carriagewayWidth > 24) ? 'Width must be between 4.25 and 24m' : null,
+    skew: (Math.abs(skewAngle) > 15) ? 'Skew angle must be within +/- 15°' : null,
+    modalWidth: (girderSpacing > overallWidth || overhangWidth > overallWidth) ? 'Partial widths cannot exceed total width' : null
+  };
+
+  const hasErrors = Object.values(errors).some(e => e !== null);
 
   return (
     <div className="w-[35%] h-full bg-white dark:bg-dark-panel border-r border-gray-200 dark:border-dark-border flex flex-col shadow-[4px_0_24px_rgba(0,0,0,0.02)] z-10">
@@ -192,12 +261,92 @@ const LeftPanel = () => {
               </div>
             </fieldset>
 
+            {/* ─────────── Geometric Details ─────────── */}
+            <fieldset className="space-y-4 pt-2">
+              <legend className={`text-sm font-semibold tracking-wide uppercase ${isOther ? 'text-gray-400 dark:text-gray-600' : 'text-gray-800 dark:text-gray-200'}`}>
+                Geometric Details
+              </legend>
+
+              <div className="space-y-1.5">
+                <label className={isOther ? labelDisabled : labelBase}>Span (m)</label>
+                <input
+                  type="number"
+                  value={span}
+                  onChange={(e) => setSpan(Number(e.target.value))}
+                  disabled={isOther}
+                  className={isOther ? selectDisabled : selectBase}
+                />
+                {!isOther && errors.span && (
+                  <p className="text-xs text-red-500 mt-1">{errors.span}</p>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className={isOther ? labelDisabled : labelBase}>Carriageway Width (m)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={carriagewayWidth}
+                  onChange={(e) => setCarriagewayWidth(Number(e.target.value))}
+                  disabled={isOther}
+                  className={isOther ? selectDisabled : selectBase}
+                />
+                {!isOther && errors.carriageway && (
+                  <p className="text-xs text-red-500 mt-1">{errors.carriageway}</p>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className={isOther ? labelDisabled : labelBase}>Footpath</label>
+                <select
+                  value={footpath}
+                  onChange={(e) => setFootpath(e.target.value)}
+                  disabled={isOther}
+                  className={isOther ? selectDisabled : selectBase}
+                >
+                  <option value="None">None</option>
+                  <option value="Single-sided">Single-sided</option>
+                  <option value="Both">Both</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className={isOther ? labelDisabled : labelBase}>Skew Angle (degrees)</label>
+                <input
+                  type="number"
+                  value={skewAngle}
+                  onChange={(e) => setSkewAngle(Number(e.target.value))}
+                  disabled={isOther}
+                  className={isOther ? selectDisabled : selectBase}
+                />
+                {!isOther && errors.skew && (
+                  <p className="text-xs text-red-500 mt-1">{errors.skew}</p>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(true)}
+                disabled={isOther}
+                className={`mt-2 flex items-center gap-2 text-sm font-medium transition-colors ${
+                  isOther
+                    ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                    : 'text-brand-600 hover:text-brand-500 dark:text-brand-400 dark:hover:text-brand-300'
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>
+                Modify Additional Geometry
+              </button>
+            </fieldset>
+
             {/* ─────────── Submit ─────────── */}
             <div className="pt-4 mt-2 border-t border-gray-100 dark:border-dark-border/50 flex justify-end">
               <button
-                disabled={isOther}
+                disabled={isOther || hasErrors}
                 className={`px-5 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 w-full sm:w-auto ${
-                  isOther
+                  (isOther || hasErrors)
                     ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-500 cursor-not-allowed'
                     : 'bg-brand-600 hover:bg-brand-500 text-white shadow-[0_4px_14px_0_rgba(139,92,246,0.39)] hover:shadow-[0_6px_20px_rgba(139,92,246,0.23)] hover:-translate-y-0.5'
                 }`}
@@ -219,6 +368,94 @@ const LeftPanel = () => {
           </div>
         )}
       </div>
+
+      {/* ─────────── Additional Geometry Modal Overlay ─────────── */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-white dark:bg-dark-panel w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 dark:border-dark-border overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-dark-border flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Additional Geometry</h2>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-5">
+              {/* Context Summary */}
+              <div className="p-3 bg-brand-50 dark:bg-brand-900/10 rounded-lg border border-brand-100 dark:border-brand-800/20">
+                <p className="text-xs font-semibold text-brand-600 dark:text-brand-400 uppercase tracking-wider mb-1">Total Limit</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Overall Bridge Width: <span className="font-mono font-bold text-gray-900 dark:text-gray-100">{overallWidth.toFixed(2)}m</span>
+                </p>
+              </div>
+
+              {errors.modalWidth && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 rounded-lg text-xs text-red-600 dark:text-red-400 flex items-center gap-2 animate-pulse">
+                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {errors.modalWidth}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className={labelBase}>Girder Spacing (m)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={girderSpacing}
+                  onChange={(e) => {
+                    setGirderSpacing(Number(e.target.value));
+                    setLastChanged('spacing');
+                  }}
+                  className={selectBase}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className={labelBase}>No. of Girders</label>
+                <input
+                  type="number"
+                  value={noOfGirders}
+                  onChange={(e) => {
+                    setNoOfGirders(Number(e.target.value));
+                    setLastChanged('noOfGirders');
+                  }}
+                  className={selectBase}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className={labelBase}>Deck Overhang Width (m)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={overhangWidth}
+                  onChange={(e) => {
+                    setOverhangWidth(Number(e.target.value));
+                    setLastChanged('overhang');
+                  }}
+                  className={selectBase}
+                />
+              </div>
+              
+              <div className="pt-2">
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="w-full py-2.5 bg-brand-600 hover:bg-brand-500 text-white font-medium rounded-xl transition-all shadow-lg active:scale-95"
+                >
+                  Confirm Geometry
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
